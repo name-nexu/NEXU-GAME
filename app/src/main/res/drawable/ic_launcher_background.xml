@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Rich gradient background: Sky Cyan to Vibrant Purple -->
+    <path
+        android:pathData="M0,0h108v108h-108z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="0"
+                android:startY="0"
+                android:endX="108"
+                android:endY="108"
+                android:type="linear">
+                <item android:offset="0.0" android:color="#29B6F6" />
+                <item android:offset="0.5" android:color="#7E57C2" />
+                <item android:offset="1.0" android:color="#EC407A" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <!-- Playful subtle background shapes / sparkles -->
+    <path
+        android:fillColor="#25FFFFFF"
+        android:pathData="M16,14h12v12h-12z" />
+    <path
+        android:fillColor="#1AFFFFFF"
+        android:pathData="M80,18h14v14h-14z" />
+    <path
+        android:fillColor="#25FFFFFF"
+        android:pathData="M12,78h16v16h-16z" />
+    <path
+        android:fillColor="#20FFFFFF"
+        android:pathData="M82,76h12v12h-12z" />
+    <path
+        android:fillColor="#33FFFFFF"
+        android:pathData="M54,8l2,5l5,2l-5,2l-2,5l-2,-5l-5,-2l5,-2z" />
+    <path
+        android:fillColor="#33FFFFFF"
+        android:pathData="M24,46l1.5,3.5l3.5,1.5l-3.5,1.5l-1.5,3.5l-1.5,-3.5l-3.5,-1.5l3.5,-1.5z" />
+    <path
+        android:fillColor="#33FFFFFF"
+        android:pathData="M86,52l1.5,3.5l3.5,1.5l-3.5,1.5l-1.5,3.5l-1.5,-3.5l-3.5,-1.5l3.5,-1.5z" />
+</vector>

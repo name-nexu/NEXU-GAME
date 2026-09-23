@@ -1,0 +1,6 @@
+{
+  "name": "Blocky Buddies",
+  "description": "A delightful block-crushing puzzle adventure for kids featuring Bloki the friendly cube!",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
