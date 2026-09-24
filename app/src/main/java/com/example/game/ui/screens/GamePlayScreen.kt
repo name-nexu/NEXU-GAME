@@ -50,6 +50,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,6 +70,10 @@ import com.example.game.engine.GameState
 import com.example.game.engine.GameStatus
 import com.example.game.model.LevelDefinition
 import com.example.game.model.PowerUpType
+import com.example.game.ui.animation.AnimatedCounter
+import com.example.game.ui.animation.AnimatedStarRating
+import com.example.game.ui.animation.VictoryConfetti
+import com.example.game.ui.animation.rememberGameAnimationManager
 import com.example.game.ui.components.BlokiCharacter
 import com.example.game.ui.components.BlokiMood
 import com.example.game.ui.components.PuzzleBoard
@@ -97,6 +102,15 @@ fun GamePlayScreen(
     val movesRemaining = gameState.movesRemaining
     val isWin = gameState.status == GameStatus.WON
     val isLost = gameState.status == GameStatus.LOST
+    val reducedMotion = profile?.reducedAnimEnabled ?: false
+
+    val animationManager = rememberGameAnimationManager(reducedMotion = reducedMotion)
+
+    LaunchedEffect(gameState.actionSequence, gameState.lastUsedPowerUp) {
+        gameState.lastUsedPowerUp?.let { pType ->
+            animationManager.triggerPowerUp(pType, levelDef.gridWidth / 2, levelDef.gridHeight / 2)
+        }
+    }
 
     // Dynamic background matching the world
     val bgBrush = when (levelDef.worldId) {
@@ -254,6 +268,7 @@ fun GamePlayScreen(
                 PuzzleBoard(
                     gameState = gameState,
                     costumeId = costumeId,
+                    animationManager = animationManager,
                     onBlockTapped = onBlockTapped
                 )
 
@@ -357,6 +372,7 @@ fun GamePlayScreen(
                 targetScore = gameState.targetScore,
                 costumeId = costumeId,
                 nextLevelDef = nextLevelDef,
+                reducedMotion = reducedMotion,
                 onNext = onNextLevel,
                 onReplay = onRestart
             )
@@ -498,100 +514,107 @@ fun WinDialog(
     targetScore: Int,
     costumeId: String,
     nextLevelDef: LevelDefinition?,
+    reducedMotion: Boolean = false,
     onNext: () -> Unit,
     onReplay: () -> Unit
 ) {
     Dialog(onDismissRequest = {}) {
-        Card(
-            shape = RoundedCornerShape(28.dp),
-            colors = CardDefaults.cardColors(containerColor = Color.White),
-            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("win_dialog")
-        ) {
-            Column(
+        Box(contentAlignment = Alignment.Center) {
+            Card(
+                shape = RoundedCornerShape(28.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(20.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
+                    .testTag("win_dialog")
             ) {
-                Text(
-                    text = "LEVEL COMPLETE!",
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Black,
-                    color = Color(0xFF00E676)
-                )
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // Jumping Excited Bloki
-                BlokiCharacter(
-                    costumeId = costumeId,
-                    mood = BlokiMood.EXCITED,
-                    size = 100.dp
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // Star Row Reveal
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    for (i in 1..3) {
-                        val earned = starsEarned >= i
-                        Icon(
-                            imageVector = Icons.Default.Star,
-                            contentDescription = "Star $i",
-                            tint = if (earned) StarGold else Color(0xFFCFD8DC),
-                            modifier = Modifier.size(36.dp)
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(10.dp))
-
-                // Score Achievement Banner
-                Surface(
-                    shape = RoundedCornerShape(14.dp),
-                    color = Color(0xFFE8F5E9),
-                    border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF00E676)),
-                    modifier = Modifier.fillMaxWidth(0.9f)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Column(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                    Text(
+                        text = "LEVEL COMPLETE!",
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Black,
+                        color = Color(0xFF00E676)
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Jumping Excited Bloki
+                    BlokiCharacter(
+                        costumeId = costumeId,
+                        mood = BlokiMood.EXCITED,
+                        size = 100.dp
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Staggered Animated Star Row
+                    AnimatedStarRating(
+                        starsEarned = starsEarned,
+                        maxStars = 3,
+                        starSize = 38.dp,
+                        reducedMotion = reducedMotion
+                    )
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Score Achievement Banner with Animated Score Counter
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = Color(0xFFE8F5E9),
+                        border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF00E676)),
+                        modifier = Modifier.fillMaxWidth(0.9f)
                     ) {
-                        Text(
-                            text = "🎉 TARGET CLEARED!",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Black,
-                            color = Color(0xFF2E7D32)
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = "Score: $currentScore pts (Goal: $targetScore)",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF37474F)
+                        Column(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "🎉 TARGET CLEARED!",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Black,
+                                color = Color(0xFF2E7D32)
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            AnimatedCounter(
+                                targetValue = currentScore,
+                                prefix = "Score: ",
+                                suffix = " pts (Goal: $targetScore)",
+                                textStyle = androidx.compose.ui.text.TextStyle(
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF37474F)
+                                ),
+                                reducedMotion = reducedMotion
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Animated Coins earned counter
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(text = "🪙", fontSize = 20.sp)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        AnimatedCounter(
+                            targetValue = coinsEarned,
+                            prefix = "+",
+                            suffix = " Coins!",
+                            textStyle = androidx.compose.ui.text.TextStyle(
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = Color(0xFFE65100)
+                            ),
+                            reducedMotion = reducedMotion
                         )
                     }
-                }
 
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Coins earned
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(text = "🪙", fontSize = 20.sp)
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "+$coinsEarned Coins!",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = Color(0xFFE65100)
-                    )
-                }
-
-                // Next Level Preview
-                if (nextLevelDef != null) {
+                    // Next Level Preview
+                    if (nextLevelDef != null) {
                     Spacer(modifier = Modifier.height(10.dp))
                     Surface(
                         shape = RoundedCornerShape(12.dp),
@@ -657,7 +680,14 @@ fun WinDialog(
                 }
             }
         }
+
+        // Confetti particle overlay
+        VictoryConfetti(
+            modifier = Modifier.fillMaxSize(),
+            reducedMotion = reducedMotion
+        )
     }
+}
 }
 
 @Composable

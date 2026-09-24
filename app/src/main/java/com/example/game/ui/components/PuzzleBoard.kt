@@ -34,6 +34,8 @@ import com.example.game.engine.ParticleStyle
 import com.example.game.model.BlockColor
 import com.example.game.model.BlockItem
 import com.example.game.model.BlockType
+import com.example.game.ui.animation.GameAnimationManager
+import com.example.game.ui.animation.GameAnimationOverlay
 import com.example.ui.theme.*
 import kotlin.math.cos
 import kotlin.math.min
@@ -63,6 +65,7 @@ private class LiveParticle(
 fun PuzzleBoard(
     gameState: GameState,
     costumeId: String = "classic",
+    animationManager: GameAnimationManager? = null,
     onBlockTapped: (Int, Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -183,8 +186,10 @@ fun PuzzleBoard(
         val totalBoardWidth = gridWidth * cellSize + (gridWidth - 1) * cellPadding
         val totalBoardHeight = gridHeight * cellSize + (gridHeight - 1) * cellPadding
 
-        val offsetX = (availableWidth - totalBoardWidth) / 2f
-        val offsetY = (availableHeight - totalBoardHeight) / 2f
+        val shakeX = animationManager?.boardShakeOffsetX ?: 0f
+        val shakeY = animationManager?.boardShakeOffsetY ?: 0f
+        val offsetX = ((availableWidth - totalBoardWidth) / 2f) + shakeX
+        val offsetY = ((availableHeight - totalBoardHeight) / 2f) + shakeY
 
         Canvas(
             modifier = Modifier
@@ -199,6 +204,10 @@ fun PuzzleBoard(
                             val row = (relativeY / (cellSize + cellPadding)).toInt()
                             if (col in 0 until gridWidth && row in 0 until gridHeight) {
                                 tapCell = col to row
+                                val tappedBlock = gameState.blocks.find { it.x == col && it.y == row }
+                                if (tappedBlock != null) {
+                                    animationManager?.triggerBlockBreak(col, row, tappedBlock.color)
+                                }
                                 onBlockTapped(col, row)
                             }
                         }
@@ -254,6 +263,19 @@ fun PuzzleBoard(
             for (particle in activeParticles) {
                 drawLiveParticle(particle, offsetX, offsetY, cellSize, cellPadding)
             }
+        }
+
+        // Overlay power-up activations and block-break shockwaves
+        animationManager?.let { mgr ->
+            GameAnimationOverlay(
+                manager = mgr,
+                gridWidth = gridWidth,
+                gridHeight = gridHeight,
+                cellSize = cellSize,
+                cellPadding = cellPadding,
+                offsetX = offsetX,
+                offsetY = offsetY
+            )
         }
     }
 }
