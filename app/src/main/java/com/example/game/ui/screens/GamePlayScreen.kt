@@ -53,6 +53,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -218,7 +219,7 @@ fun GamePlayScreen(
                     colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF9C4)),
                     modifier = Modifier
                         .fillMaxWidth(0.95f)
-                        .padding(vertical = 4.dp)
+                        .padding(vertical = 2.dp)
                         .testTag("tutorial_hint")
                 ) {
                     Text(
@@ -229,10 +230,19 @@ fun GamePlayScreen(
                         textAlign = TextAlign.Center,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                            .padding(horizontal = 10.dp, vertical = 4.dp)
                     )
                 }
             }
+
+            // Target Score & Progression Bar
+            TargetScoreProgressBar(
+                currentScore = gameState.currentScore,
+                targetScore = gameState.targetScore,
+                gridWidth = levelDef.gridWidth,
+                gridHeight = levelDef.gridHeight,
+                colorCount = levelDef.colorCount
+            )
 
             // Center Puzzle Board
             Box(
@@ -246,6 +256,26 @@ fun GamePlayScreen(
                     costumeId = costumeId,
                     onBlockTapped = onBlockTapped
                 )
+
+                // High Combo Indicator Banner
+                if (gameState.comboMultiplier >= 2) {
+                    Surface(
+                        shape = RoundedCornerShape(18.dp),
+                        color = Color(0xFFFF6D00),
+                        shadowElevation = 6.dp,
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = 4.dp)
+                    ) {
+                        Text(
+                            text = "🔥 ${gameState.comboMultiplier}x COMBO!",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Black,
+                            color = Color.White,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                        )
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(4.dp))
@@ -317,10 +347,14 @@ fun GamePlayScreen(
 
         // Win Modal
         if (isWin) {
+            val nextLevelDef = if (levelDef.levelNumber < 9999) com.example.game.level.LevelCatalog.getLevel(levelDef.levelNumber + 1) else null
             WinDialog(
                 starsEarned = gameState.starsEarned,
                 coinsEarned = gameState.coinsEarned,
+                currentScore = gameState.currentScore,
+                targetScore = gameState.targetScore,
                 costumeId = costumeId,
+                nextLevelDef = nextLevelDef,
                 onNext = onNextLevel,
                 onReplay = onRestart
             )
@@ -458,7 +492,10 @@ fun PowerUpButton(
 fun WinDialog(
     starsEarned: Int,
     coinsEarned: Int,
+    currentScore: Int,
+    targetScore: Int,
     costumeId: String,
+    nextLevelDef: LevelDefinition?,
     onNext: () -> Unit,
     onReplay: () -> Unit
 ) {
@@ -474,7 +511,7 @@ fun WinDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(24.dp),
+                    .padding(20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
@@ -484,16 +521,16 @@ fun WinDialog(
                     color = Color(0xFF00E676)
                 )
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(10.dp))
 
                 // Jumping Excited Bloki
                 BlokiCharacter(
                     costumeId = costumeId,
                     mood = BlokiMood.EXCITED,
-                    size = 110.dp
+                    size = 100.dp
                 )
 
-                Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(12.dp))
 
                 // Star Row Reveal
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -503,35 +540,92 @@ fun WinDialog(
                             imageVector = Icons.Default.Star,
                             contentDescription = "Star $i",
                             tint = if (earned) StarGold else Color(0xFFCFD8DC),
-                            modifier = Modifier.size(38.dp)
+                            modifier = Modifier.size(36.dp)
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Score Achievement Banner
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = Color(0xFFE8F5E9),
+                    border = androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF00E676)),
+                    modifier = Modifier.fillMaxWidth(0.9f)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "🎉 TARGET CLEARED!",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Black,
+                            color = Color(0xFF2E7D32)
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "Score: $currentScore pts (Goal: $targetScore)",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF37474F)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
 
                 // Coins earned
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(text = "🪙", fontSize = 22.sp)
+                    Text(text = "🪙", fontSize = 20.sp)
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = "+$coinsEarned Coins!",
-                        fontSize = 18.sp,
+                        fontSize = 16.sp,
                         fontWeight = FontWeight.ExtraBold,
                         color = Color(0xFFE65100)
                     )
                 }
 
-                Spacer(modifier = Modifier.height(20.dp))
+                // Next Level Preview
+                if (nextLevelDef != null) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xFFE1F5FE),
+                        modifier = Modifier.fillMaxWidth(0.9f)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "🚀 Next: Level ${nextLevelDef.levelNumber}",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Black,
+                                color = Color(0xFF0277BD)
+                            )
+                            Text(
+                                text = "Grid: ${nextLevelDef.gridWidth}×${nextLevelDef.gridHeight} • ${nextLevelDef.colorCount} Colors • Target: ${nextLevelDef.targetScore}",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF455A64)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
 
                 // Next Level Button
                 Button(
                     onClick = onNext,
                     modifier = Modifier
                         .fillMaxWidth(0.9f)
-                        .height(54.dp)
+                        .height(52.dp)
                         .testTag("next_level_button"),
-                    shape = RoundedCornerShape(27.dp),
+                    shape = RoundedCornerShape(26.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E676))
                 ) {
                     Text(
@@ -542,23 +636,113 @@ fun WinDialog(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
+                Spacer(modifier = Modifier.height(8.dp))
 
                 OutlinedButton(
                     onClick = onReplay,
                     modifier = Modifier
                         .fillMaxWidth(0.9f)
-                        .height(48.dp)
+                        .height(44.dp)
                         .testTag("replay_button"),
-                    shape = RoundedCornerShape(24.dp)
+                    shape = RoundedCornerShape(22.dp)
                 ) {
                     Text(
                         text = "Replay Level",
-                        fontSize = 15.sp,
+                        fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color(0xFF546E7A)
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun TargetScoreProgressBar(
+    currentScore: Int,
+    targetScore: Int,
+    gridWidth: Int,
+    gridHeight: Int,
+    colorCount: Int,
+    modifier: Modifier = Modifier
+) {
+    val progress = if (targetScore > 0) (currentScore.toFloat() / targetScore.toFloat()).coerceIn(0f, 1f) else 1f
+    val isCleared = currentScore >= targetScore
+
+    Card(
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isCleared) Color(0xFFE8F5E9) else Color.White
+        ),
+        border = if (isCleared) androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFF00E676)) else null,
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+            .testTag("target_score_bar")
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = if (isCleared) "⭐ TARGET CLEARED!" else "🎯 TARGET SCORE",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Black,
+                        color = if (isCleared) Color(0xFF2E7D32) else Color(0xFF0277BD)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "$currentScore / $targetScore pts",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF37474F)
+                    )
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = Color(0xFFECEFF1)
+                ) {
+                    Text(
+                        text = "${gridWidth}x${gridHeight} • ${colorCount}🎨",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = Color(0xFF455A64),
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // Progress track
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(8.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color(0xFFE0E0E0))
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(fraction = progress)
+                        .height(8.dp)
+                        .background(
+                            Brush.horizontalGradient(
+                                listOf(
+                                    Color(0xFFFFB300),
+                                    if (isCleared) Color(0xFF00E676) else Color(0xFFFF7043)
+                                )
+                            )
+                        )
+                )
             }
         }
     }

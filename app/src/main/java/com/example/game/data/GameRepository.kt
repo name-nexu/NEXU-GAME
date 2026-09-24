@@ -102,19 +102,28 @@ class GameRepository(private val dao: GameDao) {
         dao.insertAllAchievements(defaultAchievements)
     }
 
-    suspend fun recordLevelVictory(levelNumber: Int, earnedStars: Int, earnedCoins: Int, movesUsed: Int) {
+    suspend fun recordLevelVictory(
+        levelNumber: Int,
+        earnedStars: Int,
+        earnedCoins: Int,
+        movesUsed: Int,
+        finalScore: Int = 0
+    ) {
         val currentLevel = dao.getLevelProgress(levelNumber)
         val prevStars = currentLevel?.stars ?: 0
         val bestStars = maxOf(prevStars, earnedStars)
+        val calculatedScore = if (finalScore > 0) finalScore else ((earnedStars * 500) + (earnedCoins * 10))
+        val bestScore = maxOf(currentLevel?.highScore ?: 0, calculatedScore)
+        val bestMoves = if ((currentLevel?.bestMoves ?: 0) > 0) minOf(currentLevel!!.bestMoves, movesUsed) else movesUsed
 
         dao.insertOrUpdateLevel(
             LevelProgressEntity(
                 levelNumber = levelNumber,
                 stars = bestStars,
-                highScore = maxOf(currentLevel?.highScore ?: 0, (earnedStars * 100) + (earnedCoins * 10)),
+                highScore = bestScore,
                 unlocked = true,
                 completed = true,
-                bestMoves = movesUsed
+                bestMoves = bestMoves
             )
         )
 

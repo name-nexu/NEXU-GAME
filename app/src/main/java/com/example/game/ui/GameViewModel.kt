@@ -139,8 +139,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         _gameState.value = updated
+        handleVictoryIfWon(updated)
+    }
 
-        // Handle victory persistence
+    private fun handleVictoryIfWon(updated: GameState) {
         if (updated.status == GameStatus.WON) {
             val levelNum = _currentLevelDef.value?.levelNumber ?: 1
             if (levelNum < 9999) {
@@ -150,11 +152,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                         levelNumber = levelNum,
                         earnedStars = updated.starsEarned,
                         earnedCoins = updated.coinsEarned,
-                        movesUsed = movesUsed
+                        movesUsed = movesUsed,
+                        finalScore = updated.currentScore
                     )
                 }
             } else {
-                // Daily challenge reward: 50 coins!
                 viewModelScope.launch {
                     repository.debugAddCoins(50)
                 }
@@ -182,6 +184,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                         eng.selectPowerUp(PowerUpType.SHUFFLE)
                         val updated = eng.tapBlock(0, 0) { soundManager.playPowerUp() }
                         _gameState.value = updated
+                        handleVictoryIfWon(updated)
                     }
                 } else {
                     // Toggle selection

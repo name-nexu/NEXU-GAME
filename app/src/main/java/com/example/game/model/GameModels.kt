@@ -43,6 +43,7 @@ sealed class ObjectiveType {
     data class CollectStars(val target: Int) : ObjectiveType()
     data class CollectCoins(val target: Int) : ObjectiveType()
     data class ClearColor(val color: BlockColor, val target: Int) : ObjectiveType()
+    data class ReachScore(val targetScore: Int) : ObjectiveType()
 }
 
 data class ObjectiveProgress(
@@ -58,6 +59,7 @@ data class ObjectiveProgress(
             is ObjectiveType.CollectStars -> "Collect Stars: $current/$target"
             is ObjectiveType.CollectCoins -> "Collect Coins: $current/$target"
             is ObjectiveType.ClearColor -> "Clear ${type.color.name.lowercase().replaceFirstChar { it.uppercase() }}: $current/$target"
+            is ObjectiveType.ReachScore -> "Target Score: $current/${type.targetScore} pts"
         }
 }
 
@@ -70,8 +72,16 @@ data class LevelDefinition(
     val gridWidth: Int = 6,
     val gridHeight: Int = 8,
     val initialBlocks: List<BlockItem>,
-    val tutorialHint: String? = null
-)
+    val tutorialHint: String? = null,
+    val targetScore: Int = 1000,
+    val availableColors: List<BlockColor> = listOf(BlockColor.RED, BlockColor.BLUE, BlockColor.GREEN, BlockColor.YELLOW)
+) {
+    val star1Score: Int get() = (targetScore * 0.5f).toInt()
+    val star2Score: Int get() = (targetScore * 0.75f).toInt()
+    val star3Score: Int get() = targetScore
+    val colorCount: Int get() = availableColors.size
+    val complexityBadge: String get() = "${gridWidth}x${gridHeight} • ${availableColors.size} Colors"
+}
 
 enum class PowerUpType(
     val title: String,

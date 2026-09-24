@@ -255,10 +255,13 @@ fun LevelSelectScreen(
                     val starsEarned = progress?.stars ?: 0
                     val isNextToPlay = isUnlocked && (progress == null || !progress.completed) && levelNum == currentLevel
 
+                    val highScore = progress?.highScore ?: 0
+
                     LevelNode(
                         levelNumber = levelNum,
                         isUnlocked = isUnlocked,
                         starsEarned = starsEarned,
+                        highScore = highScore,
                         isNextToPlay = isNextToPlay,
                         pulseScale = if (isNextToPlay) pulseScale else 1f,
                         onClick = {
@@ -276,17 +279,22 @@ fun LevelNode(
     levelNumber: Int,
     isUnlocked: Boolean,
     starsEarned: Int,
+    highScore: Int = 0,
     isNextToPlay: Boolean,
     pulseScale: Float,
     onClick: () -> Unit
 ) {
+    val dims = com.example.game.level.LevelProgressionConfig.getGridDimensions(levelNumber)
+    val colorCount = com.example.game.level.LevelProgressionConfig.getColorPalette(levelNumber).size
+    val targetScore = com.example.game.level.LevelProgressionConfig.getTargetScore(levelNumber)
+
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier.testTag("level_node_$levelNumber")
     ) {
         Box(
             modifier = Modifier
-                .size(68.dp)
+                .size(64.dp)
                 .scale(pulseScale)
                 .background(
                     color = when {
@@ -315,14 +323,14 @@ fun LevelNode(
             } else {
                 Text(
                     text = levelNumber.toString(),
-                    fontSize = 22.sp,
+                    fontSize = 20.sp,
                     fontWeight = FontWeight.Black,
                     color = Color.White
                 )
             }
         }
 
-        Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(3.dp))
 
         // Star indicator row
         Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -332,7 +340,32 @@ fun LevelNode(
                     imageVector = Icons.Default.Star,
                     contentDescription = "Star $i",
                     tint = if (filled) StarGold else Color(0x33000000),
-                    modifier = Modifier.size(14.dp)
+                    modifier = Modifier.size(13.dp)
+                )
+            }
+        }
+
+        // Complexity & Score badge
+        if (isUnlocked) {
+            Text(
+                text = "${dims.first}x${dims.second} • ${colorCount}🎨",
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF546E7A)
+            )
+            if (highScore > 0) {
+                Text(
+                    text = "🏆 $highScore",
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = Color(0xFFE65100)
+                )
+            } else {
+                Text(
+                    text = "Goal: $targetScore",
+                    fontSize = 8.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = Color(0xFF78909C)
                 )
             }
         }

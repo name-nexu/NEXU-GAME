@@ -1,10 +1,21 @@
 package com.example.game.ui.components
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -14,15 +25,39 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import com.example.game.engine.GameState
 import com.example.game.engine.Particle
+import com.example.game.engine.ParticleStyle
 import com.example.game.model.BlockColor
 import com.example.game.model.BlockItem
 import com.example.game.model.BlockType
 import com.example.ui.theme.*
+import kotlin.math.cos
 import kotlin.math.min
+import kotlin.math.sin
+
+/**
+ * Runtime active particle simulated in real time on the board.
+ */
+private class LiveParticle(
+    val id: String,
+    var x: Float, // grid coordinate float
+    var y: Float,
+    var vx: Float,
+    var vy: Float,
+    val color: BlockColor,
+    val style: ParticleStyle,
+    val size: Float,
+    var rotation: Float,
+    val vRot: Float,
+    val gravity: Float,
+    val maxLifeMs: Long,
+    var ageMs: Long = 0L,
+    var alpha: Float = 1f
+)
 
 @Composable
 fun PuzzleBoard(
@@ -35,6 +70,106 @@ fun PuzzleBoard(
     val gridWidth = levelDef.gridWidth
     val gridHeight = levelDef.gridHeight
 
+    // Track smooth falling positions for each block ID
+    val blockCurrentY = remember { mutableMapOf<String, Float>() }
+    val blockVelocityY = remember { mutableMapOf<String, Float>() }
+
+    // Active particle pool
+    val activeParticles = remember { mutableStateListOf<LiveParticle>() }
+
+    // Track tap ripple feedback
+    var tapCell by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    val tapRippleAlpha = remember { Animatable(0f) }
+
+    // Frame ticker for 60fps/120fps physics & animations
+    var frameTick by remember { mutableLongStateOf(0L) }
+
+    // Watch for new particles from gameState
+    LaunchedEffect(gameState.actionSequence, gameState.particles) {
+        if (gameState.particles.isNotEmpty()) {
+            for (p in gameState.particles) {
+                activeParticles.add(
+                    LiveParticle(
+                        id = p.id,
+                        x = p.x,
+                        y = p.y,
+                        vx = p.vx,
+                        vy = p.vy,
+                        color = p.color,
+                        style = p.style,
+                        size = p.size,
+                        rotation = p.rotation,
+                        vRot = p.vRot,
+                        gravity = p.gravity,
+                        maxLifeMs = p.maxLifeMs
+                    )
+                )
+            }
+        }
+    }
+
+    // Continuous physics simulation loop while particles are active or blocks are falling
+    LaunchedEffect(Unit) {
+        var lastNano = System.nanoTime()
+        while (true) {
+            withFrameNanos { now ->
+                val dt = ((now - lastNano) / 1_000_000_000f).coerceIn(0.001f, 0.05f)
+                lastNano = now
+
+                // 1. Simulate active particles
+                val dtMs = (dt * 1000f).toLong()
+                val iterator = activeParticles.listIterator()
+                while (iterator.hasNext()) {
+                    val p = iterator.next()
+                    p.ageMs += dtMs
+                    if (p.ageMs >= p.maxLifeMs) {
+                        iterator.remove()
+                    } else {
+                        p.x += p.vx * dt
+                        p.y += p.vy * dt
+                        p.vy += p.gravity * dt
+                        p.rotation += p.vRot * dt
+                        p.alpha = (1f - p.ageMs.toFloat() / p.maxLifeMs.toFloat()).coerceIn(0f, 1f)
+                    }
+                }
+
+                // 2. Simulate falling/collapsing blocks with gravity
+                val currentBlockIds = gameState.blocks.map { it.id }.toSet()
+                // Clean up removed blocks
+                blockCurrentY.keys.retainAll(currentBlockIds)
+                blockVelocityY.keys.retainAll(currentBlockIds)
+
+                for (block in gameState.blocks) {
+                    val targetY = block.y.toFloat()
+                    val currY = blockCurrentY[block.id]
+
+                    if (currY == null) {
+                        // Newly spawned or initialized
+                        blockCurrentY[block.id] = targetY
+                        blockVelocityY[block.id] = 0f
+                    } else if (currY < targetY) {
+                        // Block is falling!
+                        var vel = blockVelocityY[block.id] ?: 0f
+                        vel += 24f * dt // fall acceleration
+                        var nextY = currY + vel * dt
+                        if (nextY >= targetY) {
+                            nextY = targetY
+                            vel = 0f
+                        }
+                        blockCurrentY[block.id] = nextY
+                        blockVelocityY[block.id] = vel
+                    } else if (currY > targetY) {
+                        // Shuffled or moved up
+                        blockCurrentY[block.id] = targetY
+                        blockVelocityY[block.id] = 0f
+                    }
+                }
+
+                frameTick = now
+            }
+        }
+    }
+
     BoxWithConstraints(modifier = modifier.fillMaxSize().testTag("puzzle_board")) {
         val availableWidth = constraints.maxWidth.toFloat()
         val availableHeight = constraints.maxHeight.toFloat()
@@ -43,7 +178,7 @@ fun PuzzleBoard(
         val cellPadding = 6f
         val maxCellWidth = (availableWidth - (gridWidth + 1) * cellPadding) / gridWidth
         val maxCellHeight = (availableHeight - (gridHeight + 1) * cellPadding) / gridHeight
-        val cellSize = min(maxCellWidth, maxCellHeight).coerceAtLeast(40f)
+        val cellSize = min(maxCellWidth, maxCellHeight).coerceAtLeast(36f)
 
         val totalBoardWidth = gridWidth * cellSize + (gridWidth - 1) * cellPadding
         val totalBoardHeight = gridHeight * cellSize + (gridHeight - 1) * cellPadding
@@ -63,27 +198,31 @@ fun PuzzleBoard(
                             val col = (relativeX / (cellSize + cellPadding)).toInt()
                             val row = (relativeY / (cellSize + cellPadding)).toInt()
                             if (col in 0 until gridWidth && row in 0 until gridHeight) {
+                                tapCell = col to row
                                 onBlockTapped(col, row)
                             }
                         }
                     }
                 }
         ) {
+            // Read frameTick to trigger redraw
+            val tick = frameTick
+
             // Draw grid background frame
             drawRoundRect(
                 color = Color(0x18000000),
-                topLeft = Offset(offsetX - cellPadding, offsetY - cellPadding),
-                size = Size(totalBoardWidth + cellPadding * 2, totalBoardHeight + cellPadding * 2),
+                topLeft = Offset(offsetX - cellPadding * 1.5f, offsetY - cellPadding * 1.5f),
+                size = Size(totalBoardWidth + cellPadding * 3f, totalBoardHeight + cellPadding * 3f),
                 cornerRadius = CornerRadius(24f, 24f)
             )
 
-            // Draw subtle cell slot placeholders
+            // Draw cell slot placeholders
             for (gx in 0 until gridWidth) {
                 for (gy in 0 until gridHeight) {
                     val px = offsetX + gx * (cellSize + cellPadding)
                     val py = offsetY + gy * (cellSize + cellPadding)
                     drawRoundRect(
-                        color = Color(0x0C000000),
+                        color = Color(0x0E000000),
                         topLeft = Offset(px, py),
                         size = Size(cellSize, cellSize),
                         cornerRadius = CornerRadius(cellSize * 0.22f, cellSize * 0.22f)
@@ -91,16 +230,29 @@ fun PuzzleBoard(
                 }
             }
 
-            // Draw Active Blocks
+            // Draw tap highlight ripple
+            tapCell?.let { (tcX, tcY) ->
+                val px = offsetX + tcX * (cellSize + cellPadding)
+                val py = offsetY + tcY * (cellSize + cellPadding)
+                drawRoundRect(
+                    color = Color(0x33FFFFFF),
+                    topLeft = Offset(px, py),
+                    size = Size(cellSize, cellSize),
+                    cornerRadius = CornerRadius(cellSize * 0.22f, cellSize * 0.22f)
+                )
+            }
+
+            // Draw Active Blocks (with smooth falling Y positions!)
             for (block in gameState.blocks) {
+                val renderY = blockCurrentY[block.id] ?: block.y.toFloat()
                 val px = offsetX + block.x * (cellSize + cellPadding)
-                val py = offsetY + block.y * (cellSize + cellPadding)
+                val py = offsetY + renderY * (cellSize + cellPadding)
                 drawBlock(block, px, py, cellSize, costumeId)
             }
 
-            // Draw Particles
-            for (particle in gameState.particles) {
-                drawParticle(particle, offsetX, offsetY, cellSize, cellPadding)
+            // Draw Active Real-Time Particles
+            for (particle in activeParticles) {
+                drawLiveParticle(particle, offsetX, offsetY, cellSize, cellPadding)
             }
         }
     }
@@ -273,7 +425,7 @@ private fun DrawScope.drawBlock(
             // Center embossed coin
             drawCircle(Color(0xFFFF6F00), size * 0.30f, Offset(x + size * 0.5f, y + size * 0.5f))
             drawCircle(Color(0xFFFFD54F), size * 0.25f, Offset(x + size * 0.5f, y + size * 0.5f))
-            // Coin dollar/gem symbol
+            // Coin star symbol
             drawStar(x + size * 0.5f, y + size * 0.5f, size * 0.16f, Color(0xFFFFF8E1))
         }
 
@@ -412,17 +564,17 @@ private fun DrawScope.drawBlokiBlock(x: Float, y: Float, size: Float, costumeId:
     }
 }
 
-private fun DrawScope.drawParticle(
-    particle: Particle,
+private fun DrawScope.drawLiveParticle(
+    p: LiveParticle,
     boardX: Float,
     boardY: Float,
     cellSize: Float,
     cellPadding: Float
 ) {
-    val px = boardX + particle.x * (cellSize + cellPadding) + cellSize * 0.5f
-    val py = boardY + particle.y * (cellSize + cellPadding) + cellSize * 0.5f
+    val px = boardX + p.x * (cellSize + cellPadding) + cellSize * 0.5f
+    val py = boardY + p.y * (cellSize + cellPadding) + cellSize * 0.5f
 
-    val color = when (particle.color) {
+    val color = when (p.color) {
         BlockColor.RED -> BlockRed
         BlockColor.BLUE -> BlockBlue
         BlockColor.GREEN -> BlockGreen
@@ -430,33 +582,137 @@ private fun DrawScope.drawParticle(
         BlockColor.PURPLE -> BlockPurple
         BlockColor.ORANGE -> BlockOrange
         BlockColor.PINK -> BlokiPink
-        else -> Color.White
+        BlockColor.RAINBOW -> Color(0xFFFF4081)
+        BlockColor.NONE -> Color(0xFFE0E0E0)
     }
 
-    if (particle.isStar) {
-        drawStar(px, py, particle.size, StarGold)
-    } else if (particle.isCoin) {
-        drawCircle(CoinAmber, particle.size, Offset(px, py))
-    } else {
-        drawRoundRect(
-            color = color,
-            topLeft = Offset(px - particle.size * 0.5f, py - particle.size * 0.5f),
-            size = Size(particle.size, particle.size),
-            cornerRadius = CornerRadius(particle.size * 0.2f, particle.size * 0.2f)
-        )
+    when (p.style) {
+        ParticleStyle.CHIP -> {
+            withTransform({
+                rotate(p.rotation, Offset(px, py))
+            }) {
+                val chipSize = p.size * (0.5f + 0.5f * p.alpha)
+                drawRoundRect(
+                    color = color.copy(alpha = p.alpha),
+                    topLeft = Offset(px - chipSize * 0.5f, py - chipSize * 0.5f),
+                    size = Size(chipSize, chipSize),
+                    cornerRadius = CornerRadius(chipSize * 0.25f, chipSize * 0.25f)
+                )
+                // Gloss highlight
+                drawRoundRect(
+                    color = Color.White.copy(alpha = p.alpha * 0.5f),
+                    topLeft = Offset(px - chipSize * 0.4f, py - chipSize * 0.4f),
+                    size = Size(chipSize * 0.8f, chipSize * 0.35f),
+                    cornerRadius = CornerRadius(chipSize * 0.15f, chipSize * 0.15f)
+                )
+            }
+        }
+
+        ParticleStyle.STAR -> {
+            withTransform({
+                rotate(p.rotation, Offset(px, py))
+            }) {
+                drawStar(px, py, p.size * p.alpha, StarGold.copy(alpha = p.alpha))
+            }
+        }
+
+        ParticleStyle.COIN -> {
+            withTransform({
+                rotate(p.rotation, Offset(px, py))
+            }) {
+                drawCircle(CoinAmber.copy(alpha = p.alpha), p.size * 0.85f, Offset(px, py))
+                drawCircle(StarGold.copy(alpha = p.alpha), p.size * 0.65f, Offset(px, py))
+                drawCircle(Color.White.copy(alpha = p.alpha * 0.8f), p.size * 0.2f, Offset(px - p.size * 0.2f, py - p.size * 0.2f))
+            }
+        }
+
+        ParticleStyle.ICE_CRYSTAL -> {
+            withTransform({
+                rotate(p.rotation, Offset(px, py))
+            }) {
+                val shard = Path().apply {
+                    moveTo(px, py - p.size)
+                    lineTo(px + p.size * 0.5f, py)
+                    lineTo(px, py + p.size * 0.7f)
+                    lineTo(px - p.size * 0.5f, py)
+                    close()
+                }
+                drawPath(shard, color = Color(0xFFE0F7FA).copy(alpha = p.alpha * 0.9f))
+                drawPath(shard, color = Color(0xFF00E5FF).copy(alpha = p.alpha), style = Stroke(2f))
+            }
+        }
+
+        ParticleStyle.SHOCKWAVE -> {
+            val progress = (p.ageMs.toFloat() / p.maxLifeMs.toFloat()).coerceIn(0f, 1f)
+            val waveRadius = p.size * (1f + progress * 4.5f)
+            val strokeW = (6f * (1f - progress)).coerceAtLeast(1.5f)
+            drawCircle(
+                color = color.copy(alpha = p.alpha * 0.8f),
+                radius = waveRadius,
+                center = Offset(px, py),
+                style = Stroke(strokeW)
+            )
+        }
+
+        ParticleStyle.SMOKE -> {
+            val progress = (p.ageMs.toFloat() / p.maxLifeMs.toFloat()).coerceIn(0f, 1f)
+            val cloudSize = p.size * (1f + progress * 1.6f)
+            drawCircle(
+                color = Color(0xFFEEEEEE).copy(alpha = p.alpha * 0.45f),
+                radius = cloudSize,
+                center = Offset(px, py)
+            )
+        }
+
+        ParticleStyle.SPARKLE -> {
+            withTransform({
+                rotate(p.rotation, Offset(px, py))
+            }) {
+                drawSparkle(px, py, p.size * p.alpha, Color.White.copy(alpha = p.alpha))
+            }
+        }
+
+        ParticleStyle.CONFETTI -> {
+            withTransform({
+                rotate(p.rotation, Offset(px, py))
+            }) {
+                val rw = p.size * 1.3f
+                val rh = p.size * 0.55f
+                drawRoundRect(
+                    color = color.copy(alpha = p.alpha),
+                    topLeft = Offset(px - rw * 0.5f, py - rh * 0.5f),
+                    size = Size(rw, rh),
+                    cornerRadius = CornerRadius(2f, 2f)
+                )
+            }
+        }
     }
 }
 
 private fun DrawScope.drawStar(cx: Float, cy: Float, radius: Float, color: Color) {
+    if (radius <= 0f) return
     val path = Path()
     val innerRadius = radius * 0.45f
     for (i in 0 until 10) {
         val r = if (i % 2 == 0) radius else innerRadius
         val angle = (i * 36.0 - 90.0) * Math.PI / 180.0
-        val x = (cx + r * kotlin.math.cos(angle)).toFloat()
-        val y = (cy + r * kotlin.math.sin(angle)).toFloat()
+        val x = (cx + r * cos(angle)).toFloat()
+        val y = (cy + r * sin(angle)).toFloat()
         if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
     }
     path.close()
+    drawPath(path, color = color)
+}
+
+private fun DrawScope.drawSparkle(cx: Float, cy: Float, radius: Float, color: Color) {
+    if (radius <= 0f) return
+    val path = Path().apply {
+        moveTo(cx, cy - radius)
+        quadraticTo(cx, cy, cx + radius, cy)
+        quadraticTo(cx, cy, cx, cy + radius)
+        quadraticTo(cx, cy, cx - radius, cy)
+        quadraticTo(cx, cy, cx, cy - radius)
+        close()
+    }
     drawPath(path, color = color)
 }

@@ -7,11 +7,24 @@ import com.example.game.model.LevelDefinition
 import com.example.game.model.ObjectiveProgress
 import com.example.game.model.ObjectiveType
 import com.example.game.model.PowerUpType
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlin.random.Random
+
+enum class ParticleStyle {
+    CHIP,
+    STAR,
+    COIN,
+    ICE_CRYSTAL,
+    SHOCKWAVE,
+    SMOKE,
+    SPARKLE,
+    CONFETTI
+}
 
 data class Particle(
     val id: String,
-    val x: Float, // relative to grid or screen
+    val x: Float, // relative to grid (column/row float)
     val y: Float,
     val vx: Float,
     val vy: Float,
@@ -19,7 +32,13 @@ data class Particle(
     val size: Float,
     val alpha: Float = 1f,
     val isStar: Boolean = false,
-    val isCoin: Boolean = false
+    val isCoin: Boolean = false,
+    val style: ParticleStyle = if (isStar) ParticleStyle.STAR else if (isCoin) ParticleStyle.COIN else ParticleStyle.CHIP,
+    val rotation: Float = 0f,
+    val vRot: Float = 0f,
+    val gravity: Float = 6f,
+    val maxLifeMs: Long = 650L,
+    val spawnTimeMs: Long = System.currentTimeMillis()
 )
 
 enum class GameStatus {
@@ -34,13 +53,21 @@ data class GameState(
     val movesRemaining: Int,
     val objectives: List<ObjectiveProgress>,
     val status: GameStatus = GameStatus.PLAYING,
+    val currentScore: Int = 0,
+    val targetScore: Int = levelDef.targetScore,
+    val lastScoreEarned: Int = 0,
     val starsEarned: Int = 0,
     val coinsEarned: Int = 0,
     val particles: List<Particle> = emptyList(),
     val activePowerUp: PowerUpType? = null,
     val blokiRescued: Boolean = false,
-    val lastActionDescription: String? = null
-)
+    val lastActionDescription: String? = null,
+    val comboMultiplier: Int = 1,
+    val actionSequence: Long = 0L // Monotonically increasing counter on every tap to trigger UI animations
+) {
+    val isTargetScoreMet: Boolean get() = currentScore >= targetScore
+    val scoreProgress: Float get() = if (targetScore > 0) (currentScore.toFloat() / targetScore.toFloat()).coerceIn(0f, 1.5f) else 1f
+}
 
 class GameEngine(private val initialLevel: LevelDefinition) {
 
@@ -55,6 +82,7 @@ class GameEngine(private val initialLevel: LevelDefinition) {
                 is ObjectiveType.CollectCoins -> obj.target
                 is ObjectiveType.ClearColor -> obj.target
                 is ObjectiveType.RescueBloki -> 1
+                is ObjectiveType.ReachScore -> obj.targetScore
             }
             ObjectiveProgress(type = obj, target = target)
         }
@@ -65,8 +93,12 @@ class GameEngine(private val initialLevel: LevelDefinition) {
             movesRemaining = level.movesAllowed,
             objectives = objProgress,
             status = GameStatus.PLAYING,
+            currentScore = 0,
+            targetScore = level.targetScore,
+            lastScoreEarned = 0,
             coinsEarned = 0,
-            starsEarned = 0
+            starsEarned = 0,
+            actionSequence = 0L
         )
     }
 
@@ -83,9 +115,62 @@ class GameEngine(private val initialLevel: LevelDefinition) {
     }
 
     /**
+     * Checks if coordinates fall within the level grid boundary.
+     */
+    fun isInsideGrid(x: Int, y: Int): Boolean {
+        return x in 0 until state.levelDef.gridWidth && y in 0 until state.levelDef.gridHeight
+    }
+
+    /**
+     * Finds connected matching normal blocks starting from a given block (Cluster Matching).
+     */
+    fun findConnectedCluster(startBlock: BlockItem, allBlocks: List<BlockItem>): List<BlockItem> {
+        if (startBlock.type != BlockType.NORMAL || startBlock.isBloki || startBlock.isGoal || startBlock.color == BlockColor.NONE) {
+            return listOf(startBlock)
+        }
+
+        val targetColor = startBlock.color
+        val blockMap = allBlocks.associateBy { it.x to it.y }
+        val visited = mutableSetOf<String>()
+        val cluster = mutableListOf<BlockItem>()
+        val queue = ArrayDeque<BlockItem>()
+
+        queue.add(startBlock)
+        visited.add(startBlock.id)
+
+        while (queue.isNotEmpty()) {
+            val curr = queue.removeFirst()
+            cluster.add(curr)
+
+            val neighbors = listOf(
+                curr.x + 1 to curr.y,
+                curr.x - 1 to curr.y,
+                curr.x to curr.y + 1,
+                curr.x to curr.y - 1
+            )
+
+            for ((nx, ny) in neighbors) {
+                val neighbor = blockMap[nx to ny]
+                if (neighbor != null &&
+                    neighbor.type == BlockType.NORMAL &&
+                    neighbor.color == targetColor &&
+                    !neighbor.isBloki &&
+                    !neighbor.isGoal &&
+                    !visited.contains(neighbor.id)
+                ) {
+                    visited.add(neighbor.id)
+                    queue.add(neighbor)
+                }
+            }
+        }
+
+        return cluster
+    }
+
+    /**
      * Main interaction: tap on a block at (gridX, gridY).
      */
-    fun tapBlock(gridX: Int, gridY: Int, onSoundEffect: (String) -> Unit): GameState {
+    fun tapBlock(gridX: Int, gridY: Int, onSoundEffect: (String) -> Unit = {}): GameState {
         if (state.status != GameStatus.PLAYING) return state
 
         val block = state.blocks.firstOrNull { it.x == gridX && it.y == gridY }
@@ -103,20 +188,38 @@ class GameEngine(private val initialLevel: LevelDefinition) {
             return state
         }
 
-        // Process block tap based on its type
         var movesDeducted = 1
         val updatedBlocks = state.blocks.toMutableList()
         val brokenBlocks = mutableListOf<BlockItem>()
         val newParticles = mutableListOf<Particle>()
         var addedCoins = 0
         var addedStars = 0
+        var combo = 1
+        var addedScore = 0
 
         when (block.type) {
             BlockType.NORMAL -> {
-                updatedBlocks.remove(block)
-                brokenBlocks.add(block)
-                onSoundEffect("break")
-                spawnBreakParticles(block, newParticles)
+                val cluster = findConnectedCluster(block, updatedBlocks)
+                if (cluster.size > 1) {
+                    combo = cluster.size
+                    for (b in cluster) {
+                        updatedBlocks.remove(b)
+                        brokenBlocks.add(b)
+                        spawnBreakParticles(b, newParticles)
+                    }
+                    addedScore += (50 * cluster.size * cluster.size)
+                    if (cluster.size >= 4) {
+                        addedCoins += 5
+                        spawnStarParticles(block, newParticles)
+                    }
+                    onSoundEffect("break")
+                } else {
+                    updatedBlocks.remove(block)
+                    brokenBlocks.add(block)
+                    addedScore += 50
+                    onSoundEffect("break")
+                    spawnBreakParticles(block, newParticles)
+                }
             }
 
             BlockType.STRONG -> {
@@ -124,18 +227,20 @@ class GameEngine(private val initialLevel: LevelDefinition) {
                     val cracked = block.copy(hp = block.hp - 1)
                     val idx = updatedBlocks.indexOf(block)
                     if (idx != -1) updatedBlocks[idx] = cracked
+                    addedScore += 50
                     onSoundEffect("hit")
                     spawnHitParticles(block, newParticles)
                 } else {
                     updatedBlocks.remove(block)
                     brokenBlocks.add(block)
+                    addedScore += 150
                     onSoundEffect("break")
                     spawnBreakParticles(block, newParticles)
                 }
             }
 
             BlockType.ICE -> {
-                // Ice doesn't break from a direct tap without power-up unless cracked
+                // Ice cannot be tapped directly without a power-up
                 onSoundEffect("tap")
                 return state
             }
@@ -144,6 +249,7 @@ class GameEngine(private val initialLevel: LevelDefinition) {
                 updatedBlocks.remove(block)
                 brokenBlocks.add(block)
                 addedStars += 1
+                addedScore += 250
                 onSoundEffect("star")
                 spawnStarParticles(block, newParticles)
             }
@@ -152,35 +258,51 @@ class GameEngine(private val initialLevel: LevelDefinition) {
                 updatedBlocks.remove(block)
                 brokenBlocks.add(block)
                 addedCoins += 10
+                addedScore += 150
                 onSoundEffect("coin")
                 spawnCoinParticles(block, newParticles)
             }
 
             BlockType.BOMB -> {
                 onSoundEffect("bomb")
-                triggerBombExplosion(block, updatedBlocks, brokenBlocks, newParticles)
+                val countBefore = brokenBlocks.size
+                triggerBombCascade(block, updatedBlocks, brokenBlocks, newParticles)
+                val casualties = (brokenBlocks.size - countBefore).coerceAtLeast(1)
+                addedScore += 300 + (casualties * 60)
             }
 
             BlockType.MAGIC -> {
                 onSoundEffect("magic")
+                val countBefore = brokenBlocks.size
                 triggerMagicCrossBlast(block, updatedBlocks, brokenBlocks, newParticles)
+                val casualties = (brokenBlocks.size - countBefore).coerceAtLeast(1)
+                addedScore += 400 + (casualties * 60)
             }
 
             BlockType.RAINBOW -> {
                 onSoundEffect("magic")
+                val countBefore = brokenBlocks.size
                 triggerRainbowClear(block, updatedBlocks, brokenBlocks, newParticles)
+                val casualties = (brokenBlocks.size - countBefore).coerceAtLeast(1)
+                addedScore += 500 + (casualties * 75)
             }
 
             BlockType.MOVING -> {
                 updatedBlocks.remove(block)
                 brokenBlocks.add(block)
+                addedScore += 100
                 onSoundEffect("break")
                 spawnBreakParticles(block, newParticles)
             }
         }
 
-        // Check adjacent ice blocks to shatter them when neighbors break
+        // Chain Reaction: shatter adjacent ice blocks when neighbors break
+        val iceBefore = brokenBlocks.size
         shatterAdjacentIce(brokenBlocks, updatedBlocks, brokenBlocks, newParticles, onSoundEffect)
+        val iceBroken = brokenBlocks.size - iceBefore
+        if (iceBroken > 0) {
+            addedScore += iceBroken * 100
+        }
 
         // Apply physics & gravity to drop unsupported blocks and Bloki
         applyGravity(updatedBlocks)
@@ -188,7 +310,10 @@ class GameEngine(private val initialLevel: LevelDefinition) {
         // Step moving blocks
         stepMovingBlocks(updatedBlocks)
 
-        // Update objectives
+        // Preliminary score before rescue check
+        val runningScore = state.currentScore + addedScore
+
+        // Evaluate objectives
         val remainingMoves = state.movesRemaining - movesDeducted
         val (updatedObjectives, isBlokiRescued) = evaluateObjectives(
             state.objectives,
@@ -196,8 +321,18 @@ class GameEngine(private val initialLevel: LevelDefinition) {
             addedStars,
             addedCoins,
             updatedBlocks,
-            state.levelDef
+            state.levelDef,
+            runningScore
         )
+
+        // If Bloki is rescued, spawn victory confetti and award bonus points!
+        if (isBlokiRescued && !state.blokiRescued) {
+            addedScore += 1000
+            val bloki = updatedBlocks.firstOrNull { it.isBloki }
+            if (bloki != null) {
+                spawnVictoryParticles(bloki, newParticles)
+            }
+        }
 
         val allObjectivesMet = updatedObjectives.all { it.completed }
         val won = allObjectivesMet
@@ -209,7 +344,13 @@ class GameEngine(private val initialLevel: LevelDefinition) {
             else -> GameStatus.PLAYING
         }
 
-        val totalStarsEarned = if (won) calculateStarsEarned(remainingMoves, state.levelDef.movesAllowed) else 0
+        // If won, grant bonus points for leftover moves
+        val movesBonus = if (won) remainingMoves.coerceAtLeast(0) * 150 else 0
+        val finalScore = state.currentScore + addedScore + movesBonus
+
+        val totalStarsEarned = if (won) {
+            calculateStarsEarned(finalScore, state.targetScore, remainingMoves, state.levelDef.movesAllowed)
+        } else 0
 
         if (won) onSoundEffect("win")
         else if (lost) onSoundEffect("fail")
@@ -219,10 +360,14 @@ class GameEngine(private val initialLevel: LevelDefinition) {
             movesRemaining = remainingMoves.coerceAtLeast(0),
             objectives = updatedObjectives,
             status = currentStatus,
+            currentScore = finalScore,
+            lastScoreEarned = addedScore + movesBonus,
             starsEarned = totalStarsEarned,
             coinsEarned = state.coinsEarned + addedCoins + (if (won) 30 else 0),
             particles = newParticles,
-            blokiRescued = isBlokiRescued
+            blokiRescued = isBlokiRescued,
+            comboMultiplier = combo,
+            actionSequence = state.actionSequence + 1
         )
 
         return state
@@ -307,7 +452,15 @@ class GameEngine(private val initialLevel: LevelDefinition) {
             }
         }
 
+        // Chain Reaction: Ice shatters adjacent to any broken block
+        val iceBefore = brokenBlocks.size
+        shatterAdjacentIce(brokenBlocks, updatedBlocks, brokenBlocks, newParticles, onSoundEffect)
+        val iceBroken = brokenBlocks.size - iceBefore
+
         applyGravity(updatedBlocks)
+
+        val powerUpAddedScore = (brokenBlocks.size * 60) + (iceBroken * 100) + (addedStars * 250) + (addedCoins * 15)
+        val runningScore = state.currentScore + powerUpAddedScore
 
         val (updatedObjectives, isBlokiRescued) = evaluateObjectives(
             state.objectives,
@@ -315,46 +468,78 @@ class GameEngine(private val initialLevel: LevelDefinition) {
             addedStars,
             addedCoins,
             updatedBlocks,
-            state.levelDef
+            state.levelDef,
+            runningScore
         )
+
+        var totalEarned = powerUpAddedScore
+        if (isBlokiRescued && !state.blokiRescued) {
+            totalEarned += 1000
+            val bloki = updatedBlocks.firstOrNull { it.isBloki }
+            if (bloki != null) spawnVictoryParticles(bloki, newParticles)
+        }
 
         val won = updatedObjectives.all { it.completed }
         val currentStatus = if (won) GameStatus.WON else state.status
+        val movesBonus = if (won) state.movesRemaining.coerceAtLeast(0) * 150 else 0
+        val finalScore = state.currentScore + totalEarned + movesBonus
+
+        val stars = if (won) {
+            calculateStarsEarned(finalScore, state.targetScore, state.movesRemaining, state.levelDef.movesAllowed)
+        } else state.starsEarned
 
         state = state.copy(
             blocks = updatedBlocks,
             objectives = updatedObjectives,
             activePowerUp = null, // Consume power up selection
             status = currentStatus,
-            starsEarned = if (won) calculateStarsEarned(state.movesRemaining, state.levelDef.movesAllowed) else state.starsEarned,
+            currentScore = finalScore,
+            lastScoreEarned = totalEarned + movesBonus,
+            starsEarned = stars,
             particles = newParticles,
-            blokiRescued = isBlokiRescued
+            blokiRescued = isBlokiRescued,
+            actionSequence = state.actionSequence + 1
         )
 
         return state
     }
 
-    private fun triggerBombExplosion(
-        bomb: BlockItem,
+    /**
+     * Triggers a cascade of bomb detonations if explosions trigger neighboring bombs.
+     */
+    private fun triggerBombCascade(
+        initialBomb: BlockItem,
         currentBlocks: MutableList<BlockItem>,
         brokenBlocks: MutableList<BlockItem>,
         particles: MutableList<Particle>
     ) {
-        currentBlocks.remove(bomb)
-        brokenBlocks.add(bomb)
-        spawnExplosionParticles(bomb, particles)
+        val bombQueue = ArrayDeque<BlockItem>()
+        bombQueue.add(initialBomb)
 
-        // Blast 3x3 surrounding
-        val surrounding = currentBlocks.filter {
-            !it.isGoal && !it.isBloki &&
-                kotlin.math.abs(it.x - bomb.x) <= 1 &&
-                kotlin.math.abs(it.y - bomb.y) <= 1
-        }
+        while (bombQueue.isNotEmpty()) {
+            val bomb = bombQueue.removeFirst()
+            if (!currentBlocks.contains(bomb) && bomb != initialBomb) continue
 
-        for (victim in surrounding) {
-            currentBlocks.remove(victim)
-            brokenBlocks.add(victim)
-            spawnBreakParticles(victim, particles)
+            currentBlocks.remove(bomb)
+            brokenBlocks.add(bomb)
+            spawnExplosionParticles(bomb, particles)
+
+            // 3x3 Blast zone
+            val surrounding = currentBlocks.filter {
+                !it.isGoal && !it.isBloki &&
+                    kotlin.math.abs(it.x - bomb.x) <= 1 &&
+                    kotlin.math.abs(it.y - bomb.y) <= 1
+            }
+
+            for (victim in surrounding) {
+                if (victim.type == BlockType.BOMB) {
+                    bombQueue.add(victim)
+                } else {
+                    currentBlocks.remove(victim)
+                    brokenBlocks.add(victim)
+                    spawnBreakParticles(victim, particles)
+                }
+            }
         }
     }
 
@@ -366,7 +551,7 @@ class GameEngine(private val initialLevel: LevelDefinition) {
     ) {
         currentBlocks.remove(magic)
         brokenBlocks.add(magic)
-        spawnExplosionParticles(magic, particles)
+        spawnCrossBlastParticles(magic, particles)
 
         // Cross blast: entire row and entire column
         val lineVictims = currentBlocks.filter {
@@ -422,7 +607,7 @@ class GameEngine(private val initialLevel: LevelDefinition) {
         for (ice in iceToShatter.distinct()) {
             if (currentBlocks.remove(ice)) {
                 allBroken.add(ice)
-                spawnBreakParticles(ice, particles)
+                spawnIceParticles(ice, particles)
                 onSound("ice")
             }
         }
@@ -430,21 +615,20 @@ class GameEngine(private val initialLevel: LevelDefinition) {
 
     /**
      * Physics: Drops blocks down column-by-column until they hit the bottom or another block.
+     * Guaranteed that no movable block is left floating in mid-air.
      */
-    private fun applyGravity(blocks: MutableList<BlockItem>) {
+    fun applyGravity(blocks: MutableList<BlockItem>) {
         val width = state.levelDef.gridWidth
         val height = state.levelDef.gridHeight
 
         // Process each column independently
         for (x in 0 until width) {
-            // Find all blocks in this column, sorted by y ascending (top to bottom)
             val colBlocks = blocks.filter { it.x == x }.sortedBy { it.y }.toMutableList()
 
-            // Separate goal blocks (they are static at bottom)
+            // Separate goal blocks (they are static platforms)
             val goals = colBlocks.filter { it.isGoal }
             val movables = colBlocks.filter { !it.isGoal }
 
-            // Drop down from bottom upwards
             var lowestAvailableY = height - 1
             if (goals.isNotEmpty()) {
                 val minGoalY = goals.minOf { it.y }
@@ -491,7 +675,8 @@ class GameEngine(private val initialLevel: LevelDefinition) {
         addedStars: Int,
         addedCoins: Int,
         remainingBlocks: List<BlockItem>,
-        levelDef: LevelDefinition
+        levelDef: LevelDefinition,
+        currentScore: Int
     ): Pair<List<ObjectiveProgress>, Boolean> {
         val bloki = remainingBlocks.firstOrNull { it.isBloki }
         val goals = remainingBlocks.filter { it.isGoal }
@@ -504,6 +689,8 @@ class GameEngine(private val initialLevel: LevelDefinition) {
         } else {
             false
         }
+
+        val effectiveScore = currentScore + (if (blokiRescued) 1000 else 0)
 
         val updated = currentObjectives.map { obj ->
             var current = obj.current
@@ -525,6 +712,9 @@ class GameEngine(private val initialLevel: LevelDefinition) {
                 is ObjectiveType.RescueBloki -> {
                     if (blokiRescued) current = 1
                 }
+                is ObjectiveType.ReachScore -> {
+                    current = effectiveScore
+                }
             }
             val completed = current >= obj.target
             obj.copy(current = current, completed = completed)
@@ -533,92 +723,273 @@ class GameEngine(private val initialLevel: LevelDefinition) {
         return Pair(updated, blokiRescued)
     }
 
-    private fun calculateStarsEarned(remainingMoves: Int, totalMoves: Int): Int {
-        val ratio = remainingMoves.toFloat() / totalMoves.toFloat()
+    private fun calculateStarsEarned(
+        score: Int,
+        targetScore: Int,
+        remainingMoves: Int,
+        totalMoves: Int
+    ): Int {
+        val moveRatio = if (totalMoves > 0) remainingMoves.toFloat() / totalMoves.toFloat() else 0f
         return when {
-            ratio >= 0.40f -> 3
-            ratio >= 0.15f -> 2
+            score >= targetScore || (score >= targetScore * 0.85f && moveRatio >= 0.35f) -> 3
+            score >= (targetScore * 0.65f) || moveRatio >= 0.15f -> 2
             else -> 1
         }
     }
 
+    // --- Particle Spawning Engine ---
+
     private fun spawnBreakParticles(block: BlockItem, list: MutableList<Particle>) {
-        for (i in 0..7) {
+        val count = 10
+        for (i in 0 until count) {
+            val angle = (i * (360f / count) + Random.nextFloat() * 20f) * (Math.PI.toFloat() / 180f)
+            val speed = Random.nextFloat() * 2.5f + 1.2f
             list.add(
                 Particle(
                     id = "p_${block.id}_$i",
                     x = block.x.toFloat(),
                     y = block.y.toFloat(),
-                    vx = (Random.nextFloat() - 0.5f) * 2f,
-                    vy = (Random.nextFloat() - 0.5f) * 2f,
+                    vx = cos(angle) * speed,
+                    vy = sin(angle) * speed - 1.2f, // upward initial impulse
                     color = block.color,
-                    size = Random.nextFloat() * 12f + 6f
+                    size = Random.nextFloat() * 12f + 8f,
+                    style = ParticleStyle.CHIP,
+                    rotation = Random.nextFloat() * 360f,
+                    vRot = (Random.nextFloat() - 0.5f) * 360f,
+                    gravity = 5.5f,
+                    maxLifeMs = 600L
+                )
+            )
+        }
+        // Add 3 bright sparkle bursts
+        for (i in 0..2) {
+            list.add(
+                Particle(
+                    id = "spk_${block.id}_$i",
+                    x = block.x.toFloat() + (Random.nextFloat() - 0.5f) * 0.4f,
+                    y = block.y.toFloat() + (Random.nextFloat() - 0.5f) * 0.4f,
+                    vx = (Random.nextFloat() - 0.5f) * 1.5f,
+                    vy = (Random.nextFloat() - 0.5f) * 1.5f,
+                    color = BlockColor.NONE,
+                    size = 14f,
+                    style = ParticleStyle.SPARKLE,
+                    gravity = 1f,
+                    maxLifeMs = 450L
                 )
             )
         }
     }
 
     private fun spawnHitParticles(block: BlockItem, list: MutableList<Particle>) {
-        for (i in 0..3) {
+        for (i in 0..4) {
             list.add(
                 Particle(
                     id = "hit_${block.id}_$i",
                     x = block.x.toFloat(),
                     y = block.y.toFloat(),
-                    vx = (Random.nextFloat() - 0.5f) * 1.2f,
-                    vy = (Random.nextFloat() - 0.5f) * 1.2f,
+                    vx = (Random.nextFloat() - 0.5f) * 2.0f,
+                    vy = (Random.nextFloat() - 0.5f) * 2.0f,
                     color = block.color,
-                    size = 6f
+                    size = 7f,
+                    style = ParticleStyle.CHIP,
+                    rotation = Random.nextFloat() * 180f,
+                    vRot = (Random.nextFloat() - 0.5f) * 240f,
+                    gravity = 6f,
+                    maxLifeMs = 400L
+                )
+            )
+        }
+    }
+
+    private fun spawnIceParticles(block: BlockItem, list: MutableList<Particle>) {
+        for (i in 0..11) {
+            val angle = Random.nextFloat() * Math.PI.toFloat() * 2f
+            val speed = Random.nextFloat() * 3.0f + 1.0f
+            list.add(
+                Particle(
+                    id = "ice_${block.id}_$i",
+                    x = block.x.toFloat(),
+                    y = block.y.toFloat(),
+                    vx = cos(angle) * speed,
+                    vy = sin(angle) * speed - 1.5f,
+                    color = BlockColor.BLUE,
+                    size = Random.nextFloat() * 10f + 6f,
+                    style = ParticleStyle.ICE_CRYSTAL,
+                    rotation = Random.nextFloat() * 360f,
+                    vRot = (Random.nextFloat() - 0.5f) * 400f,
+                    gravity = 5f,
+                    maxLifeMs = 650L
                 )
             )
         }
     }
 
     private fun spawnExplosionParticles(block: BlockItem, list: MutableList<Particle>) {
-        for (i in 0..14) {
+        // Central shockwave ring
+        list.add(
+            Particle(
+                id = "sw_${block.id}",
+                x = block.x.toFloat(),
+                y = block.y.toFloat(),
+                vx = 0f,
+                vy = 0f,
+                color = BlockColor.ORANGE,
+                size = 18f,
+                style = ParticleStyle.SHOCKWAVE,
+                gravity = 0f,
+                maxLifeMs = 500L
+            )
+        )
+
+        // Flying fiery explosion chips
+        for (i in 0..15) {
+            val angle = Random.nextFloat() * Math.PI.toFloat() * 2f
+            val speed = Random.nextFloat() * 4.2f + 1.5f
+            val col = if (i % 2 == 0) BlockColor.ORANGE else BlockColor.YELLOW
             list.add(
                 Particle(
                     id = "exp_${block.id}_$i",
                     x = block.x.toFloat(),
                     y = block.y.toFloat(),
-                    vx = (Random.nextFloat() - 0.5f) * 3.5f,
-                    vy = (Random.nextFloat() - 0.5f) * 3.5f,
-                    color = BlockColor.ORANGE,
-                    size = Random.nextFloat() * 16f + 8f
+                    vx = cos(angle) * speed,
+                    vy = sin(angle) * speed - 1.0f,
+                    color = col,
+                    size = Random.nextFloat() * 14f + 8f,
+                    style = ParticleStyle.CHIP,
+                    rotation = Random.nextFloat() * 360f,
+                    vRot = (Random.nextFloat() - 0.5f) * 500f,
+                    gravity = 6f,
+                    maxLifeMs = 700L
+                )
+            )
+        }
+
+        // Puffy smoke clouds
+        for (i in 0..4) {
+            list.add(
+                Particle(
+                    id = "smk_${block.id}_$i",
+                    x = block.x.toFloat() + (Random.nextFloat() - 0.5f) * 0.3f,
+                    y = block.y.toFloat() + (Random.nextFloat() - 0.5f) * 0.3f,
+                    vx = (Random.nextFloat() - 0.5f) * 0.8f,
+                    vy = -Random.nextFloat() * 1.5f - 0.5f,
+                    color = BlockColor.NONE,
+                    size = 20f,
+                    style = ParticleStyle.SMOKE,
+                    gravity = -0.5f,
+                    maxLifeMs = 750L
                 )
             )
         }
     }
 
+    private fun spawnCrossBlastParticles(magic: BlockItem, list: MutableList<Particle>) {
+        // Shockwave at center
+        list.add(
+            Particle(
+                id = "sw_${magic.id}",
+                x = magic.x.toFloat(),
+                y = magic.y.toFloat(),
+                vx = 0f,
+                vy = 0f,
+                color = BlockColor.PURPLE,
+                size = 20f,
+                style = ParticleStyle.SHOCKWAVE,
+                gravity = 0f,
+                maxLifeMs = 450L
+            )
+        )
+
+        // Directional laser sparkles (Horizontal & Vertical)
+        val directions = listOf(
+            Pair(1f, 0f), Pair(-1f, 0f), Pair(0f, 1f), Pair(0f, -1f)
+        )
+        for (d in directions) {
+            for (step in 1..4) {
+                list.add(
+                    Particle(
+                        id = "mag_${magic.id}_${d.first}_${d.second}_$step",
+                        x = magic.x.toFloat() + d.first * step * 0.8f,
+                        y = magic.y.toFloat() + d.second * step * 0.8f,
+                        vx = d.first * 4.5f,
+                        vy = d.second * 4.5f,
+                        color = BlockColor.PURPLE,
+                        size = 12f,
+                        style = ParticleStyle.SPARKLE,
+                        gravity = 0f,
+                        maxLifeMs = 500L
+                    )
+                )
+            }
+        }
+    }
+
     private fun spawnStarParticles(block: BlockItem, list: MutableList<Particle>) {
-        for (i in 0..6) {
+        for (i in 0..7) {
             list.add(
                 Particle(
                     id = "star_${block.id}_$i",
                     x = block.x.toFloat(),
                     y = block.y.toFloat(),
-                    vx = (Random.nextFloat() - 0.5f) * 2.2f,
-                    vy = -Random.nextFloat() * 2f - 0.5f,
+                    vx = (Random.nextFloat() - 0.5f) * 2.5f,
+                    vy = -Random.nextFloat() * 3.0f - 1.0f,
                     color = BlockColor.YELLOW,
-                    size = 14f,
-                    isStar = true
+                    size = 15f,
+                    isStar = true,
+                    style = ParticleStyle.STAR,
+                    rotation = Random.nextFloat() * 360f,
+                    vRot = (Random.nextFloat() - 0.5f) * 200f,
+                    gravity = 2.5f,
+                    maxLifeMs = 750L
                 )
             )
         }
     }
 
     private fun spawnCoinParticles(block: BlockItem, list: MutableList<Particle>) {
-        for (i in 0..5) {
+        for (i in 0..6) {
             list.add(
                 Particle(
                     id = "coin_${block.id}_$i",
                     x = block.x.toFloat(),
                     y = block.y.toFloat(),
-                    vx = (Random.nextFloat() - 0.5f) * 1.8f,
-                    vy = -Random.nextFloat() * 2f,
+                    vx = (Random.nextFloat() - 0.5f) * 2.0f,
+                    vy = -Random.nextFloat() * 3.5f - 1.2f,
                     color = BlockColor.YELLOW,
-                    size = 12f,
-                    isCoin = true
+                    size = 14f,
+                    isCoin = true,
+                    style = ParticleStyle.COIN,
+                    rotation = Random.nextFloat() * 180f,
+                    vRot = (Random.nextFloat() - 0.5f) * 250f,
+                    gravity = 4.5f,
+                    maxLifeMs = 700L
+                )
+            )
+        }
+    }
+
+    private fun spawnVictoryParticles(bloki: BlockItem, list: MutableList<Particle>) {
+        val rainbowColors = listOf(
+            BlockColor.RED, BlockColor.ORANGE, BlockColor.YELLOW,
+            BlockColor.GREEN, BlockColor.BLUE, BlockColor.PURPLE, BlockColor.PINK
+        )
+        for (i in 0..24) {
+            val angle = Random.nextFloat() * Math.PI.toFloat() * 2f
+            val speed = Random.nextFloat() * 3.5f + 1.5f
+            list.add(
+                Particle(
+                    id = "vic_${bloki.id}_$i",
+                    x = bloki.x.toFloat(),
+                    y = bloki.y.toFloat(),
+                    vx = cos(angle) * speed,
+                    vy = sin(angle) * speed - 2.5f,
+                    color = rainbowColors[i % rainbowColors.size],
+                    size = Random.nextFloat() * 12f + 8f,
+                    style = if (i % 3 == 0) ParticleStyle.STAR else ParticleStyle.CONFETTI,
+                    rotation = Random.nextFloat() * 360f,
+                    vRot = (Random.nextFloat() - 0.5f) * 360f,
+                    gravity = 3.5f,
+                    maxLifeMs = 900L
                 )
             )
         }
