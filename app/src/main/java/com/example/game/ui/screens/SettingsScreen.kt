@@ -17,11 +17,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Vibration
-import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -42,6 +42,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.BuildConfig
 import com.example.game.data.entity.PlayerProfileEntity
 import com.example.ui.theme.BlokiCyan
 
@@ -131,7 +132,7 @@ fun SettingsScreen(
                 SettingsToggleRow(
                     title = "Sound Effects",
                     subtitle = "Taps, pops, breaks & explosions",
-                    icon = Icons.Default.VolumeUp,
+                    icon = Icons.AutoMirrored.Filled.VolumeUp,
                     checked = soundEnabled,
                     onCheckedChange = onToggleSound,
                     tag = "toggle_sound"
@@ -228,11 +229,11 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // Version & Developer Tools Trigger
+        // Version & Developer Tools Trigger (Debug builds only)
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable {
+                .clickable(enabled = BuildConfig.DEBUG) {
                     devTapCount++
                     if (devTapCount >= 4) {
                         devTapCount = 0
@@ -248,11 +249,13 @@ fun SettingsScreen(
                 fontWeight = FontWeight.Bold,
                 color = Color(0xFF78909C)
             )
-            Text(
-                text = "(Tap here 4 times for Developer Mode)",
-                fontSize = 11.sp,
-                color = Color(0xFFB0BEC5)
-            )
+            if (BuildConfig.DEBUG) {
+                Text(
+                    text = "(Tap here 4 times for Developer Mode)",
+                    fontSize = 11.sp,
+                    color = Color(0xFFB0BEC5)
+                )
+            }
         }
     }
 }

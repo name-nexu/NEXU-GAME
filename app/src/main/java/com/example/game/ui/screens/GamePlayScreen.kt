@@ -347,7 +347,9 @@ fun GamePlayScreen(
 
         // Win Modal
         if (isWin) {
-            val nextLevelDef = if (levelDef.levelNumber < 9999) com.example.game.level.LevelCatalog.getLevel(levelDef.levelNumber + 1) else null
+            val nextLevelDef = if (levelDef.levelNumber < 9999 && com.example.game.level.LevelCatalog.hasLevel(levelDef.levelNumber + 1)) {
+                com.example.game.level.LevelCatalog.getLevel(levelDef.levelNumber + 1)
+            } else null
             WinDialog(
                 starsEarned = gameState.starsEarned,
                 coinsEarned = gameState.coinsEarned,

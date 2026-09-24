@@ -29,9 +29,10 @@ class GameEngineTest {
         // Find a breakable normal block to tap
         val block = engine.state.blocks.firstOrNull { it.type == BlockType.NORMAL && !it.isGoal && !it.isBloki }
         assertNotNull(block)
+        val targetBlock = requireNotNull(block)
 
         val soundEvents = mutableListOf<String>()
-        val updated = engine.tapBlock(block!!.x, block.y) { soundEvents.add(it) }
+        val updated = engine.tapBlock(targetBlock.x, targetBlock.y) { soundEvents.add(it) }
 
         // Block should have broken and moves decremented by 1
         assertEquals(9, updated.movesRemaining)

@@ -1,5 +1,6 @@
 package com.example.game.engine
 
+import com.example.game.config.GameConfig
 import com.example.game.model.BlockColor
 import com.example.game.model.BlockItem
 import com.example.game.model.BlockType
@@ -63,7 +64,9 @@ data class GameState(
     val blokiRescued: Boolean = false,
     val lastActionDescription: String? = null,
     val comboMultiplier: Int = 1,
-    val actionSequence: Long = 0L // Monotonically increasing counter on every tap to trigger UI animations
+    val actionSequence: Long = 0L, // Monotonically increasing counter on every tap to trigger UI animations
+    val lastUsedPowerUp: PowerUpType? = null,
+    val lastBlocksBrokenCount: Int = 0
 ) {
     val isTargetScoreMet: Boolean get() = currentScore >= targetScore
     val scoreProgress: Float get() = if (targetScore > 0) (currentScore.toFloat() / targetScore.toFloat()).coerceIn(0f, 1.5f) else 1f
@@ -177,7 +180,8 @@ class GameEngine(private val initialLevel: LevelDefinition) {
 
         // If using an active power-up
         if (state.activePowerUp != null) {
-            return executePowerUpAction(state.activePowerUp!!, gridX, gridY, block, onSoundEffect)
+            val activePowerUp = state.activePowerUp ?: return state
+            return executePowerUpAction(activePowerUp, gridX, gridY, block, onSoundEffect)
         }
 
         if (block == null || block.isGoal) return state
@@ -248,19 +252,11 @@ class GameEngine(private val initialLevel: LevelDefinition) {
             BlockType.STAR -> {
                 updatedBlocks.remove(block)
                 brokenBlocks.add(block)
-                addedStars += 1
-                addedScore += 250
-                onSoundEffect("star")
-                spawnStarParticles(block, newParticles)
             }
 
             BlockType.COIN -> {
                 updatedBlocks.remove(block)
                 brokenBlocks.add(block)
-                addedCoins += 10
-                addedScore += 150
-                onSoundEffect("coin")
-                spawnCoinParticles(block, newParticles)
             }
 
             BlockType.BOMB -> {
@@ -301,8 +297,14 @@ class GameEngine(private val initialLevel: LevelDefinition) {
         shatterAdjacentIce(brokenBlocks, updatedBlocks, brokenBlocks, newParticles, onSoundEffect)
         val iceBroken = brokenBlocks.size - iceBefore
         if (iceBroken > 0) {
-            addedScore += iceBroken * 100
+            addedScore += iceBroken * GameConfig.Rewards.ICE_BLOCK_POINTS
         }
+
+        // Centralized processing of all broken blocks (Stars, Coins, Objectives)
+        val destructionResult = processBrokenBlocks(brokenBlocks, newParticles, onSoundEffect)
+        addedCoins += destructionResult.addedCoins
+        addedStars += destructionResult.addedStars
+        addedScore += destructionResult.addedScore
 
         // Apply physics & gravity to drop unsupported blocks and Bloki
         applyGravity(updatedBlocks)
@@ -327,7 +329,7 @@ class GameEngine(private val initialLevel: LevelDefinition) {
 
         // If Bloki is rescued, spawn victory confetti and award bonus points!
         if (isBlokiRescued && !state.blokiRescued) {
-            addedScore += 1000
+            addedScore += GameConfig.Rewards.BLOKI_RESCUE_BONUS_POINTS
             val bloki = updatedBlocks.firstOrNull { it.isBloki }
             if (bloki != null) {
                 spawnVictoryParticles(bloki, newParticles)
@@ -345,7 +347,7 @@ class GameEngine(private val initialLevel: LevelDefinition) {
         }
 
         // If won, grant bonus points for leftover moves
-        val movesBonus = if (won) remainingMoves.coerceAtLeast(0) * 150 else 0
+        val movesBonus = if (won) remainingMoves.coerceAtLeast(0) * GameConfig.Rewards.LEFTOVER_MOVE_BONUS_POINTS else 0
         val finalScore = state.currentScore + addedScore + movesBonus
 
         val totalStarsEarned = if (won) {
@@ -363,11 +365,13 @@ class GameEngine(private val initialLevel: LevelDefinition) {
             currentScore = finalScore,
             lastScoreEarned = addedScore + movesBonus,
             starsEarned = totalStarsEarned,
-            coinsEarned = state.coinsEarned + addedCoins + (if (won) 30 else 0),
+            coinsEarned = state.coinsEarned + addedCoins + (if (won) GameConfig.Rewards.LEVEL_WIN_BASE_COINS else 0),
             particles = newParticles,
             blokiRescued = isBlokiRescued,
             comboMultiplier = combo,
-            actionSequence = state.actionSequence + 1
+            actionSequence = state.actionSequence + 1,
+            lastUsedPowerUp = null,
+            lastBlocksBrokenCount = destructionResult.totalBlocksBroken
         )
 
         return state
@@ -383,8 +387,7 @@ class GameEngine(private val initialLevel: LevelDefinition) {
         val updatedBlocks = state.blocks.toMutableList()
         val brokenBlocks = mutableListOf<BlockItem>()
         val newParticles = mutableListOf<Particle>()
-        var addedCoins = 0
-        var addedStars = 0
+        var powerUpSucceeded = false
 
         when (powerUp) {
             PowerUpType.HAMMER -> {
@@ -393,6 +396,7 @@ class GameEngine(private val initialLevel: LevelDefinition) {
                     brokenBlocks.add(targetBlock)
                     onSoundEffect("powerup")
                     spawnBreakParticles(targetBlock, newParticles)
+                    powerUpSucceeded = true
                 }
             }
 
@@ -401,55 +405,73 @@ class GameEngine(private val initialLevel: LevelDefinition) {
                 val victims = updatedBlocks.filter {
                     !it.isGoal && !it.isBloki && (it.x == x || it.y == y)
                 }
-                for (v in victims) {
-                    updatedBlocks.remove(v)
-                    brokenBlocks.add(v)
-                    spawnBreakParticles(v, newParticles)
+                if (victims.isNotEmpty()) {
+                    for (v in victims) {
+                        updatedBlocks.remove(v)
+                        brokenBlocks.add(v)
+                        spawnBreakParticles(v, newParticles)
+                    }
+                    onSoundEffect("bomb")
+                    powerUpSucceeded = true
                 }
-                onSoundEffect("bomb")
             }
 
             PowerUpType.RAINBOW -> {
                 // Clear all blocks matching target color
                 if (targetBlock != null && targetBlock.color != BlockColor.NONE && !targetBlock.isBloki && !targetBlock.isGoal) {
                     val victims = updatedBlocks.filter { it.color == targetBlock.color && !it.isGoal && !it.isBloki }
-                    for (v in victims) {
-                        updatedBlocks.remove(v)
-                        brokenBlocks.add(v)
-                        spawnBreakParticles(v, newParticles)
+                    if (victims.isNotEmpty()) {
+                        for (v in victims) {
+                            updatedBlocks.remove(v)
+                            brokenBlocks.add(v)
+                            spawnBreakParticles(v, newParticles)
+                        }
+                        onSoundEffect("magic")
+                        powerUpSucceeded = true
                     }
-                    onSoundEffect("magic")
                 }
             }
 
             PowerUpType.MAGIC_WAND -> {
                 // Transform tough blocks (Strong or Ice) into Star/Coin blocks
                 val toughs = updatedBlocks.filter { it.type == BlockType.STRONG || it.type == BlockType.ICE }
-                for (t in toughs) {
-                    val idx = updatedBlocks.indexOf(t)
-                    if (idx != -1) {
-                        val transformType = if (Random.nextBoolean()) BlockType.STAR else BlockType.COIN
-                        val transformColor = BlockColor.YELLOW
-                        updatedBlocks[idx] = t.copy(type = transformType, color = transformColor, hp = 1, maxHp = 1)
-                        spawnStarParticles(t, newParticles)
+                if (toughs.isNotEmpty()) {
+                    for (t in toughs) {
+                        val idx = updatedBlocks.indexOf(t)
+                        if (idx != -1) {
+                            val transformType = if (Random.nextBoolean()) BlockType.STAR else BlockType.COIN
+                            val transformColor = BlockColor.YELLOW
+                            updatedBlocks[idx] = t.copy(type = transformType, color = transformColor, hp = 1, maxHp = 1)
+                            spawnStarParticles(t, newParticles)
+                        }
                     }
+                    onSoundEffect("magic")
+                    powerUpSucceeded = true
                 }
-                onSoundEffect("magic")
             }
 
             PowerUpType.SHUFFLE -> {
                 // Shuffle block colors & types among non-goal/non-bloki blocks
                 val regularBlocks = updatedBlocks.filter { !it.isGoal && !it.isBloki }
-                val shuffledColors = regularBlocks.map { it.color }.shuffled()
-                val shuffledTypes = regularBlocks.map { it.type }.shuffled()
-                regularBlocks.forEachIndexed { index, b ->
-                    val idx = updatedBlocks.indexOf(b)
-                    if (idx != -1) {
-                        updatedBlocks[idx] = b.copy(color = shuffledColors[index], type = shuffledTypes[index])
+                if (regularBlocks.size > 1) {
+                    val shuffledColors = regularBlocks.map { it.color }.shuffled()
+                    val shuffledTypes = regularBlocks.map { it.type }.shuffled()
+                    regularBlocks.forEachIndexed { index, b ->
+                        val idx = updatedBlocks.indexOf(b)
+                        if (idx != -1) {
+                            updatedBlocks[idx] = b.copy(color = shuffledColors[index], type = shuffledTypes[index])
+                        }
                     }
+                    onSoundEffect("powerup")
+                    powerUpSucceeded = true
                 }
-                onSoundEffect("powerup")
             }
+        }
+
+        // If the power-up could not be executed (e.g. invalid target, empty space), do NOT consume it
+        if (!powerUpSucceeded) {
+            onSoundEffect("tap")
+            return state
         }
 
         // Chain Reaction: Ice shatters adjacent to any broken block
@@ -458,8 +480,17 @@ class GameEngine(private val initialLevel: LevelDefinition) {
         val iceBroken = brokenBlocks.size - iceBefore
 
         applyGravity(updatedBlocks)
+        stepMovingBlocks(updatedBlocks)
 
-        val powerUpAddedScore = (brokenBlocks.size * 60) + (iceBroken * 100) + (addedStars * 250) + (addedCoins * 15)
+        // Centralized destruction processing for power-ups (Stars, Coins, Objectives)
+        val destructionResult = processBrokenBlocks(brokenBlocks, newParticles, onSoundEffect)
+        val addedCoins = destructionResult.addedCoins
+        val addedStars = destructionResult.addedStars
+
+        val powerUpAddedScore = (brokenBlocks.size * GameConfig.Rewards.POWER_UP_BLOCK_POINTS) +
+            (iceBroken * GameConfig.Rewards.ICE_BLOCK_POINTS) +
+            destructionResult.addedScore
+
         val runningScore = state.currentScore + powerUpAddedScore
 
         val (updatedObjectives, isBlokiRescued) = evaluateObjectives(
@@ -474,19 +505,21 @@ class GameEngine(private val initialLevel: LevelDefinition) {
 
         var totalEarned = powerUpAddedScore
         if (isBlokiRescued && !state.blokiRescued) {
-            totalEarned += 1000
+            totalEarned += GameConfig.Rewards.BLOKI_RESCUE_BONUS_POINTS
             val bloki = updatedBlocks.firstOrNull { it.isBloki }
             if (bloki != null) spawnVictoryParticles(bloki, newParticles)
         }
 
         val won = updatedObjectives.all { it.completed }
         val currentStatus = if (won) GameStatus.WON else state.status
-        val movesBonus = if (won) state.movesRemaining.coerceAtLeast(0) * 150 else 0
+        val movesBonus = if (won) state.movesRemaining.coerceAtLeast(0) * GameConfig.Rewards.LEFTOVER_MOVE_BONUS_POINTS else 0
         val finalScore = state.currentScore + totalEarned + movesBonus
 
         val stars = if (won) {
             calculateStarsEarned(finalScore, state.targetScore, state.movesRemaining, state.levelDef.movesAllowed)
         } else state.starsEarned
+
+        if (won) onSoundEffect("win")
 
         state = state.copy(
             blocks = updatedBlocks,
@@ -496,12 +529,88 @@ class GameEngine(private val initialLevel: LevelDefinition) {
             currentScore = finalScore,
             lastScoreEarned = totalEarned + movesBonus,
             starsEarned = stars,
+            coinsEarned = state.coinsEarned + addedCoins + (if (won) GameConfig.Rewards.LEVEL_WIN_BASE_COINS else 0),
             particles = newParticles,
             blokiRescued = isBlokiRescued,
-            actionSequence = state.actionSequence + 1
+            actionSequence = state.actionSequence + 1,
+            lastUsedPowerUp = powerUp, // Signals ViewModel that this power-up was consumed
+            lastBlocksBrokenCount = destructionResult.totalBlocksBroken
         )
 
         return state
+    }
+
+    private data class DestructionResult(
+        val addedCoins: Int,
+        val addedStars: Int,
+        val addedScore: Int,
+        val totalBlocksBroken: Int
+    )
+
+    /**
+     * Centralized processing for all broken blocks.
+     * Ensures consistent star, coin, and score accounting across normal play, bombs, blasts, and power-ups.
+     */
+    private fun processBrokenBlocks(
+        brokenBlocks: List<BlockItem>,
+        newParticles: MutableList<Particle>,
+        onSoundEffect: (String) -> Unit
+    ): DestructionResult {
+        var addedCoins = 0
+        var addedStars = 0
+        var addedScore = 0
+
+        val distinctBroken = brokenBlocks.distinctBy { it.id }
+        for (b in distinctBroken) {
+            when (b.type) {
+                BlockType.STAR -> {
+                    addedStars += 1
+                    addedScore += GameConfig.Rewards.STAR_COLLECT_POINTS
+                    spawnStarParticles(b, newParticles)
+                    onSoundEffect("star")
+                }
+                BlockType.COIN -> {
+                    addedCoins += GameConfig.Rewards.COIN_BLOCK_COINS
+                    addedScore += GameConfig.Rewards.COIN_BLOCK_POINTS
+                    spawnCoinParticles(b, newParticles)
+                    onSoundEffect("coin")
+                }
+                else -> {}
+            }
+        }
+
+        return DestructionResult(
+            addedCoins = addedCoins,
+            addedStars = addedStars,
+            addedScore = addedScore,
+            totalBlocksBroken = distinctBroken.count { !it.isBloki && !it.isGoal }
+        )
+    }
+
+    /**
+     * Executes Shuffle power-up directly on the board.
+     * Returns true if shuffled, false if no shuffle was possible.
+     */
+    fun shuffleBoard(onSoundEffect: (String) -> Unit = {}): Boolean {
+        val updatedBlocks = state.blocks.toMutableList()
+        val regularBlocks = updatedBlocks.filter { !it.isGoal && !it.isBloki }
+        if (regularBlocks.size <= 1) return false
+
+        val shuffledColors = regularBlocks.map { it.color }.shuffled()
+        val shuffledTypes = regularBlocks.map { it.type }.shuffled()
+        regularBlocks.forEachIndexed { index, b ->
+            val idx = updatedBlocks.indexOf(b)
+            if (idx != -1) {
+                updatedBlocks[idx] = b.copy(color = shuffledColors[index], type = shuffledTypes[index])
+            }
+        }
+        onSoundEffect("powerup")
+        state = state.copy(
+            blocks = updatedBlocks,
+            actionSequence = state.actionSequence + 1,
+            lastUsedPowerUp = PowerUpType.SHUFFLE
+        )
+        return true
     }
 
     /**

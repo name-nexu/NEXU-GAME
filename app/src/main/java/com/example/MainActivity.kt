@@ -134,7 +134,7 @@ fun BlockyBuddiesApp(viewModel: GameViewModel = viewModel()) {
             if (devModeVisible) {
                 DevToolsDialog(
                     onDismiss = { viewModel.setDevModeVisible(false) },
-                    onJumpToLevel = { lvl -> viewModel.startLevel(lvl) },
+                    onJumpToLevel = { lvl -> viewModel.devJumpToLevel(lvl) },
                     onAddCoins = { viewModel.devAddCoins(500) },
                     onUnlockAllLevels = { viewModel.devUnlockAllLevels() },
                     onResetProgress = { viewModel.devResetProgress() }

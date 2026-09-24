@@ -23,13 +23,18 @@ abstract class AppDatabase : RoomDatabase() {
 
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
-                val instance = Room.databaseBuilder(
+                val builder = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
                     "blocky_buddies_database"
                 )
-                    .fallbackToDestructiveMigration()
-                    .build()
+                // Safe migration policy:
+                // Only allow destructive migration in debug builds during rapid development.
+                // In release builds, do not silently destroy player progress.
+                if (com.example.BuildConfig.DEBUG) {
+                    builder.fallbackToDestructiveMigration(false)
+                }
+                val instance = builder.build()
                 INSTANCE = instance
                 instance
             }

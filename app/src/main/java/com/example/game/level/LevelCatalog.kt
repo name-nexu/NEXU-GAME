@@ -1,5 +1,6 @@
 package com.example.game.level
 
+import com.example.game.config.GameConfig
 import com.example.game.model.BlockColor
 import com.example.game.model.BlockItem
 import com.example.game.model.BlockType
@@ -56,6 +57,10 @@ object LevelProgressionConfig {
  * plus procedural scaling for up to 1000+ levels across 5 worlds.
  */
 object LevelCatalog {
+
+    fun hasLevel(levelNumber: Int): Boolean {
+        return levelNumber in 1..GameConfig.Levels.MAX_LEVELS
+    }
 
     fun getLevel(levelNumber: Int): LevelDefinition {
         return if (levelNumber in 1..20) {

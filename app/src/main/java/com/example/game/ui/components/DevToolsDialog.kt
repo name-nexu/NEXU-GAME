@@ -29,6 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import com.example.BuildConfig
 import com.example.game.level.LevelCatalog
 
 @Composable
@@ -40,6 +41,11 @@ fun DevToolsDialog(
     onResetProgress: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    if (!BuildConfig.DEBUG) {
+        onDismiss()
+        return
+    }
+
     var inputLevelText by remember { mutableStateOf("1") }
     var solvabilityStatus by remember { mutableStateOf<String?>(null) }
 

@@ -88,11 +88,11 @@ enum class PowerUpType(
     val description: String,
     val costCoins: Int
 ) {
-    HAMMER("Hammer", "Tap any block to crush it!", 50),
-    ROCKET("Rocket", "Clears entire row and column!", 75),
-    RAINBOW("Rainbow", "Clears all blocks of chosen color!", 100),
-    MAGIC_WAND("Magic Wand", "Transforms tough blocks into Star/Coin blocks!", 80),
-    SHUFFLE("Shuffle", "Shuffles the puzzle when stuck!", 40)
+    HAMMER("Hammer", "Tap any block to crush it!", com.example.game.config.GameConfig.PowerUps.HAMMER_PRICE),
+    ROCKET("Rocket", "Clears entire row and column!", com.example.game.config.GameConfig.PowerUps.ROCKET_PRICE),
+    RAINBOW("Rainbow", "Clears all blocks of chosen color!", com.example.game.config.GameConfig.PowerUps.RAINBOW_PRICE),
+    MAGIC_WAND("Magic Wand", "Transforms tough blocks into Star/Coin blocks!", com.example.game.config.GameConfig.PowerUps.WAND_PRICE),
+    SHUFFLE("Shuffle", "Shuffles the puzzle when stuck!", com.example.game.config.GameConfig.PowerUps.SHUFFLE_PRICE)
 }
 
 data class Costume(
